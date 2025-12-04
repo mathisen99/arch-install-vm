@@ -77,6 +77,42 @@ print_info "Installing dialog for interactive menus..."
 pacman -Sy --noconfirm dialog &>/dev/null
 print_msg "Dialog installed"
 
+# ============================================================================
+# WELCOME SCREEN
+# ============================================================================
+clear
+echo -e "${CYAN}"
+cat << 'EOF'
+   _____                .__      ___________                                                                           
+  /  _  \_______   ____ |  |__   \_   _____/____    _________.__.                                                      
+ /  /_\  \_  __ \_/ ___\|  |  \   |    __)_\__  \  /  ___<   |  |                                                      
+/    |    \  | \/\  \___|   Y  \  |        \/ __ \_\___ \ \___  |                                                      
+\____|__  /__|    \___  >___|  / /_______  (____  /____  >/ ____|                                                      
+        \/            \/     \/          \/     \/     \/ \/                                                           
+__________         .____    .__                               .__            __     ____ ___                           
+\______   \___.__. |    |   |__| ____  __ _____  ___     ____ |  |__ _____ _/  |_  |    |   \______ ___________  ______
+ |    |  _<   |  | |    |   |  |/    \|  |  \  \/  /   _/ ___\|  |  \\__  \\   __\ |    |   /  ___// __ \_  __ \/  ___/
+ |    |   \\___  | |    |___|  |   |  \  |  />    <    \  \___|   Y  \/ __ \|  |   |    |  /\___ \\  ___/|  | \/\___ \ 
+ |______  // ____| |_______ \__|___|  /____//__/\_ \ /\ \___  >___|  (____  /__|   |______//____  >\___  >__|  /____  >
+        \/ \/              \/       \/            \/ \/     \/     \/     \/                    \/     \/           \/       
+EOF
+echo -e "${NC}"
+echo ""
+echo -e "${BOLD}Welcome to Mathisen's Arch Linux Install Script for VMs${NC}"
+echo ""
+echo -e "This script will guide you through installing Arch Linux with:"
+echo -e "  ${GREEN}•${NC} Automatic partitioning (ext4 or btrfs with subvolumes)"
+echo -e "  ${GREEN}•${NC} Optional LUKS disk encryption"
+echo -e "  ${GREEN}•${NC} Choice of desktop environments (XFCE, GNOME, KDE, Hyprland, etc.)"
+echo -e "  ${GREEN}•${NC} PipeWire audio, NetworkManager, and more"
+echo -e "  ${GREEN}•${NC} zswap and tmpfs for better performance"
+echo -e "  ${GREEN}•${NC} Optional Zsh with Oh-My-Zsh"
+echo ""
+echo -e "${YELLOW}WARNING: This will ERASE the selected disk!${NC}"
+echo ""
+prompt "Press Enter to continue..."
+read
+
 clear
 print_header "Mathisen's Arch Install Script for VMs"
 
@@ -227,7 +263,7 @@ fi
 print_header "Desktop Environment Selection"
 
 DESKTOP_ENV=$(dialog --clear --title "Desktop Environment" \
-    --menu "Choose your desktop environment:" 18 70 10 \
+    --menu "Choose your desktop environment:" 20 70 12 \
     "xfce" "XFCE4 - Lightweight, traditional desktop" \
     "gnome" "GNOME - Modern, full-featured desktop" \
     "kde" "KDE Plasma - Feature-rich, customizable" \
@@ -237,10 +273,29 @@ DESKTOP_ENV=$(dialog --clear --title "Desktop Environment" \
     "budgie" "Budgie - Modern, elegant desktop" \
     "i3" "i3 - Tiling window manager" \
     "sway" "Sway - i3-compatible Wayland compositor" \
+    "hyprland" "Hyprland - Dynamic tiling Wayland compositor" \
     "none" "No desktop - CLI only" 2>&1 >/dev/tty)
 
 clear
 print_msg "Selected desktop: ${BOLD}${DESKTOP_ENV}${NC}"
+
+# NVIDIA GPU detection for Hyprland/Sway
+HAS_NVIDIA="no"
+if [[ "$DESKTOP_ENV" == "hyprland" ]] || [[ "$DESKTOP_ENV" == "sway" ]]; then
+    # Check for NVIDIA GPU
+    if lspci | grep -i nvidia &>/dev/null; then
+        dialog --clear --title "NVIDIA GPU Detected" \
+            --yesno "An NVIDIA GPU was detected.\n\nDo you want to install NVIDIA proprietary drivers?\n\nThis is recommended for Hyprland/Sway on NVIDIA.\nThe script will configure nvidia_drm modeset=1." 12 60 2>&1 >/dev/tty
+        if [[ $? -eq 0 ]]; then
+            HAS_NVIDIA="yes"
+            clear
+            print_msg "NVIDIA drivers: ${BOLD}Will be installed${NC}"
+        else
+            clear
+            print_info "NVIDIA drivers: ${BOLD}Skipped${NC} (using nouveau)"
+        fi
+    fi
+fi
 
 # ============================================================================
 # SHELL SELECTION
@@ -398,6 +453,9 @@ echo -e "  ${BOLD}Keymap:${NC}      $KEYMAP"
 echo -e "  ${BOLD}Username:${NC}    $USERNAME"
 echo -e "  ${BOLD}Shell:${NC}       $SHELL_CHOICE"
 echo -e "  ${BOLD}Desktop:${NC}     $DESKTOP_ENV"
+if [[ "$HAS_NVIDIA" == "yes" ]]; then
+    echo -e "  ${BOLD}GPU Driver:${NC}  NVIDIA (proprietary)"
+fi
 echo -e "  ${BOLD}Audio:${NC}       PipeWire"
 echo -e "  ${BOLD}Features:${NC}    zswap, tmpfs /tmp"
 if [[ "$FS_TYPE" == "btrfs" ]]; then
@@ -545,7 +603,7 @@ print_msg "All partitions mounted"
 print_step "Installing base system (this may take a while)..."
 
 # Base packages
-PACKAGES="base base-devel linux linux-firmware networkmanager grub sudo nano vim"
+PACKAGES="base base-devel linux linux-firmware networkmanager grub sudo nano vim btop terminator tmux"
 PACKAGES="$PACKAGES reflector"
 
 # Add btrfs-progs if using btrfs
@@ -594,7 +652,7 @@ if [[ "$DESKTOP_ENV" != "none" ]]; then
             DESKTOP_PACKAGES="$DESKTOP_PACKAGES sddm"
             DISPLAY_MANAGER="sddm"
             ;;
-        sway|i3)
+        sway|i3|hyprland)
             # No display manager for tiling WMs by default
             DISPLAY_MANAGER=""
             ;;
@@ -641,7 +699,23 @@ if [[ "$DESKTOP_ENV" != "none" ]]; then
             DESKTOP_PACKAGES="$DESKTOP_PACKAGES waybar wofi foot mako"
             DESKTOP_PACKAGES="$DESKTOP_PACKAGES xorg-xwayland thunar grim slurp"
             ;;
+        hyprland)
+            DESKTOP_PACKAGES="$DESKTOP_PACKAGES hyprland"
+            DESKTOP_PACKAGES="$DESKTOP_PACKAGES xdg-desktop-portal-hyprland xdg-desktop-portal-gtk"
+            DESKTOP_PACKAGES="$DESKTOP_PACKAGES hyprpaper hypridle hyprlock hyprpolkitagent"
+            DESKTOP_PACKAGES="$DESKTOP_PACKAGES waybar wofi foot mako"
+            DESKTOP_PACKAGES="$DESKTOP_PACKAGES xorg-xwayland thunar grim slurp wl-clipboard cliphist"
+            DESKTOP_PACKAGES="$DESKTOP_PACKAGES brightnessctl playerctl pamixer"
+            DESKTOP_PACKAGES="$DESKTOP_PACKAGES qt5-wayland qt6-wayland"
+            ;;
     esac
+    
+    # Install NVIDIA drivers if selected
+    if [[ "$HAS_NVIDIA" == "yes" ]]; then
+        print_step "Installing NVIDIA drivers..."
+        pacstrap /mnt nvidia nvidia-utils nvidia-settings
+        print_msg "NVIDIA drivers installed"
+    fi
     
     pacstrap /mnt $DESKTOP_PACKAGES
     print_msg "${DESKTOP_ENV} desktop installed"
@@ -779,6 +853,51 @@ XINITRC
     chown ${USERNAME}:${USERNAME} /home/${USERNAME}/.xinitrc
 fi
 
+# Configure NVIDIA for Hyprland/Sway if needed
+if [[ "${HAS_NVIDIA}" == "yes" ]]; then
+    # Create nvidia modprobe config
+    cat > /etc/modprobe.d/nvidia.conf << NVIDIACONF
+options nvidia_drm modeset=1
+options nvidia_drm fbdev=1
+NVIDIACONF
+    
+    # Add nvidia modules to initramfs
+    sed -i 's/^MODULES=.*/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)/' /etc/mkinitcpio.conf
+    
+    # Create pacman hook to rebuild initramfs on nvidia updates
+    mkdir -p /etc/pacman.d/hooks
+    cat > /etc/pacman.d/hooks/nvidia.hook << NVIDIAHOOK
+[Trigger]
+Operation=Install
+Operation=Upgrade
+Operation=Remove
+Type=Package
+Target=nvidia
+Target=linux
+
+[Action]
+Description=Update NVIDIA module in initcpio
+Depends=mkinitcpio
+When=PostTransaction
+NeedsTargets
+Exec=/bin/sh -c 'while read -r trg; do case \\\$trg in linux*) exit 0; esac; done; /usr/bin/mkinitcpio -P'
+NVIDIAHOOK
+    
+    # Set environment variables for Hyprland with NVIDIA
+    if [[ "${DESKTOP_ENV}" == "hyprland" ]]; then
+        mkdir -p /home/${USERNAME}/.config/hypr
+        cat > /home/${USERNAME}/.config/hypr/env.conf << HYPRENV
+# NVIDIA environment variables
+env = LIBVA_DRIVER_NAME,nvidia
+env = XDG_SESSION_TYPE,wayland
+env = GBM_BACKEND,nvidia-drm
+env = __GLX_VENDOR_LIBRARY_NAME,nvidia
+env = NVD_BACKEND,direct
+HYPRENV
+        chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}/.config
+    fi
+fi
+
 # Configure sudo
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
 
@@ -875,6 +994,13 @@ if [[ "$DESKTOP_ENV" == "i3" ]] && [[ -z "$DISPLAY_MANAGER" ]]; then
 elif [[ "$DESKTOP_ENV" == "sway" ]]; then
     echo -e "${BOLD}To start Sway:${NC}"
     echo -e "  Login and run: ${CYAN}sway${NC}"
+    echo ""
+elif [[ "$DESKTOP_ENV" == "hyprland" ]]; then
+    echo -e "${BOLD}To start Hyprland:${NC}"
+    echo -e "  Login and run: ${CYAN}Hyprland${NC}"
+    if [[ "$HAS_NVIDIA" == "yes" ]]; then
+        echo -e "  ${YELLOW}NVIDIA configured with modeset=1${NC}"
+    fi
     echo ""
 fi
 prompt "Press Enter to reboot (or Ctrl+C to stay)..."
