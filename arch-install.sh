@@ -331,9 +331,101 @@ DISK=$(dialog --clear --title "Disk Selection" \
 clear
 print_msg "Selected disk: ${BOLD}${DISK}${NC}"
 
-# Confirm disk selection
-dialog --clear --title "WARNING" \
-    --yesno "This will ERASE ALL DATA on ${DISK}\n\nAre you sure you want to continue?" 8 50
+# ============================================================================
+# WINDOWS DETECTION & DUAL BOOT
+# ============================================================================
+DUAL_BOOT="no"
+WINDOWS_EFI_PART=""
+
+# Check for Windows installation on selected disk
+print_info "Checking for existing Windows installation..."
+
+# Look for Windows EFI boot manager or NTFS partitions with Windows
+if [[ "$BOOT_MODE" == "UEFI" ]]; then
+    # Check for EFI System Partition with Windows Boot Manager
+    for part in ${DISK}*[0-9]; do
+        if [[ -b "$part" ]]; then
+            PART_TYPE=$(blkid -s TYPE -o value "$part" 2>/dev/null)
+            if [[ "$PART_TYPE" == "vfat" ]]; then
+                # Mount and check for Windows boot files
+                mkdir -p /tmp/efi_check
+                if mount -o ro "$part" /tmp/efi_check 2>/dev/null; then
+                    if [[ -d "/tmp/efi_check/EFI/Microsoft/Boot" ]]; then
+                        WINDOWS_EFI_PART="$part"
+                        print_msg "Windows Boot Manager found on ${BOLD}$part${NC}"
+                    fi
+                    umount /tmp/efi_check
+                fi
+                rmdir /tmp/efi_check 2>/dev/null
+            fi
+        fi
+    done
+fi
+
+# Also check for NTFS partitions (Windows system drive)
+WINDOWS_NTFS_FOUND="no"
+for part in ${DISK}*[0-9]; do
+    if [[ -b "$part" ]]; then
+        PART_TYPE=$(blkid -s TYPE -o value "$part" 2>/dev/null)
+        if [[ "$PART_TYPE" == "ntfs" ]]; then
+            WINDOWS_NTFS_FOUND="yes"
+            break
+        fi
+    fi
+done
+
+# If Windows detected, ask about dual boot
+if [[ -n "$WINDOWS_EFI_PART" ]] || [[ "$WINDOWS_NTFS_FOUND" == "yes" ]]; then
+    print_warn "Windows installation detected on this disk!"
+    
+    dialog --clear --title "Windows Detected" \
+        --yesno "A Windows installation was detected on ${DISK}.\n\nDo you want to set up dual-boot?\n\n• YES = Install alongside Windows (requires free space)\n• NO = Erase entire disk (destroys Windows)" 12 65 2>&1 >/dev/tty
+    
+    if [[ $? -eq 0 ]]; then
+        DUAL_BOOT="yes"
+        clear
+        print_msg "Dual-boot mode: ${BOLD}Enabled${NC}"
+        
+        # Check for unallocated space or ask user to specify partition
+        print_header "Dual-Boot Setup"
+        
+        echo -e "${YELLOW}For dual-boot, you need free unallocated space on the disk.${NC}"
+        echo ""
+        echo -e "Current partition layout of ${BOLD}${DISK}${NC}:"
+        echo ""
+        lsblk -o NAME,SIZE,FSTYPE,LABEL "$DISK"
+        echo ""
+        
+        # LUKS not supported with dual-boot (too complex)
+        if [[ "$USE_LUKS" == "yes" ]]; then
+            print_warn "LUKS encryption is not supported with dual-boot. Disabling encryption."
+            USE_LUKS="no"
+        fi
+        
+        echo -e "${CYAN}You need to have created free space in Windows Disk Management first.${NC}"
+        echo -e "${CYAN}If you haven't done this, press Ctrl+C to cancel and shrink your${NC}"
+        echo -e "${CYAN}Windows partition from within Windows first.${NC}"
+        echo ""
+        prompt "Press Enter if you have free space ready, or Ctrl+C to cancel..."
+        read
+        clear
+    else
+        DUAL_BOOT="no"
+        clear
+        print_msg "Dual-boot: ${BOLD}Disabled${NC} (will erase disk)"
+    fi
+else
+    print_info "No Windows installation detected"
+fi
+
+# Confirm disk selection (different message for dual-boot)
+if [[ "$DUAL_BOOT" == "yes" ]]; then
+    dialog --clear --title "Dual-Boot Confirmation" \
+        --yesno "Arch Linux will be installed in the free space on ${DISK}.\n\nWindows partitions will be preserved.\n\nContinue?" 10 55 2>&1 >/dev/tty
+else
+    dialog --clear --title "WARNING" \
+        --yesno "This will ERASE ALL DATA on ${DISK}\n\nAre you sure you want to continue?" 8 50 2>&1 >/dev/tty
+fi
 clear
 
 # ============================================================================
@@ -443,6 +535,7 @@ print_msg "User password set"
 # ============================================================================
 print_header "Installation Summary"
 echo -e "  ${BOLD}Disk:${NC}        $DISK"
+echo -e "  ${BOLD}Install:${NC}     $(if [[ "$DUAL_BOOT" == "yes" ]]; then echo "Dual-boot with Windows"; else echo "Clean install"; fi)"
 echo -e "  ${BOLD}Encryption:${NC}  $(if [[ "$USE_LUKS" == "yes" ]]; then echo "LUKS"; else echo "None"; fi)"
 echo -e "  ${BOLD}Filesystem:${NC}  $FS_TYPE"
 echo -e "  ${BOLD}Boot Mode:${NC}   $BOOT_MODE"
@@ -485,10 +578,6 @@ print_msg "System clock synced"
 # Partitioning
 print_step "Partitioning disk $DISK..."
 
-# Wipe existing partition table
-wipefs -af "$DISK" &>/dev/null
-print_msg "Wiped existing partition table"
-
 # Determine partition naming
 if [[ "$DISK" == *"nvme"* ]] || [[ "$DISK" == *"mmcblk"* ]]; then
     PART_PREFIX="${DISK}p"
@@ -496,29 +585,77 @@ else
     PART_PREFIX="${DISK}"
 fi
 
-if [[ "$BOOT_MODE" == "UEFI" ]]; then
-    # UEFI partitioning with GPT (no swap partition - using zswap)
-    parted -s "$DISK" mklabel gpt
-    parted -s "$DISK" mkpart "EFI" fat32 1MiB 513MiB
-    parted -s "$DISK" set 1 esp on
-    parted -s "$DISK" mkpart "root" ${FS_TYPE} 513MiB 100%
+if [[ "$DUAL_BOOT" == "yes" ]]; then
+    # DUAL-BOOT: Don't wipe disk, create partition in free space
+    print_info "Dual-boot mode: preserving existing partitions"
     
-    EFI_PART="${PART_PREFIX}1"
-    ROOT_PART="${PART_PREFIX}2"
+    # Use existing Windows EFI partition
+    EFI_PART="$WINDOWS_EFI_PART"
+    print_msg "Using existing EFI partition: ${EFI_PART}"
     
-    print_msg "Created GPT partition table"
-    print_info "  EFI:  ${EFI_PART} (512MB)"
-    print_info "  Root: ${ROOT_PART} (remaining) - ${FS_TYPE}"
+    # Find the next available partition number
+    LAST_PART_NUM=$(lsblk -n -o NAME "$DISK" | grep -E "^${DISK##*/}[0-9]+" | sed "s/${DISK##*/}//" | sort -n | tail -1)
+    NEXT_PART_NUM=$((LAST_PART_NUM + 1))
+    
+    # Create root partition in free space
+    # First, find free space using parted
+    print_step "Creating Arch Linux partition in free space..."
+    
+    # Get the end of the last partition and disk size
+    FREE_SPACE_START=$(parted -s "$DISK" unit MiB print free | grep "Free Space" | tail -1 | awk '{print $1}' | sed 's/MiB//')
+    FREE_SPACE_END=$(parted -s "$DISK" unit MiB print free | grep "Free Space" | tail -1 | awk '{print $2}' | sed 's/MiB//')
+    
+    if [[ -z "$FREE_SPACE_START" ]] || [[ -z "$FREE_SPACE_END" ]]; then
+        print_error "No free space found on disk! Please shrink Windows partition first."
+        exit 1
+    fi
+    
+    FREE_SPACE_SIZE=$((FREE_SPACE_END - FREE_SPACE_START))
+    if [[ $FREE_SPACE_SIZE -lt 20000 ]]; then
+        print_error "Not enough free space! Need at least 20GB, found ${FREE_SPACE_SIZE}MB"
+        exit 1
+    fi
+    
+    print_info "Found ${FREE_SPACE_SIZE}MB of free space"
+    
+    # Create the root partition
+    parted -s "$DISK" mkpart primary ${FS_TYPE} ${FREE_SPACE_START}MiB ${FREE_SPACE_END}MiB
+    
+    ROOT_PART="${PART_PREFIX}${NEXT_PART_NUM}"
+    
+    print_msg "Created Arch Linux partition"
+    print_info "  EFI (shared):  ${EFI_PART}"
+    print_info "  Root:          ${ROOT_PART} (${FREE_SPACE_SIZE}MB) - ${FS_TYPE}"
+
 else
-    # BIOS partitioning with MBR (no swap partition - using zswap)
-    parted -s "$DISK" mklabel msdos
-    parted -s "$DISK" mkpart primary ${FS_TYPE} 1MiB 100%
-    parted -s "$DISK" set 1 boot on
-    
-    ROOT_PART="${PART_PREFIX}1"
-    
-    print_msg "Created MBR partition table"
-    print_info "  Root: ${ROOT_PART} (full disk) - ${FS_TYPE}"
+    # CLEAN INSTALL: Wipe and create new partition table
+    wipefs -af "$DISK" &>/dev/null
+    print_msg "Wiped existing partition table"
+
+    if [[ "$BOOT_MODE" == "UEFI" ]]; then
+        # UEFI partitioning with GPT (no swap partition - using zswap)
+        parted -s "$DISK" mklabel gpt
+        parted -s "$DISK" mkpart "EFI" fat32 1MiB 513MiB
+        parted -s "$DISK" set 1 esp on
+        parted -s "$DISK" mkpart "root" ${FS_TYPE} 513MiB 100%
+        
+        EFI_PART="${PART_PREFIX}1"
+        ROOT_PART="${PART_PREFIX}2"
+        
+        print_msg "Created GPT partition table"
+        print_info "  EFI:  ${EFI_PART} (512MB)"
+        print_info "  Root: ${ROOT_PART} (remaining) - ${FS_TYPE}"
+    else
+        # BIOS partitioning with MBR (no swap partition - using zswap)
+        parted -s "$DISK" mklabel msdos
+        parted -s "$DISK" mkpart primary ${FS_TYPE} 1MiB 100%
+        parted -s "$DISK" set 1 boot on
+        
+        ROOT_PART="${PART_PREFIX}1"
+        
+        print_msg "Created MBR partition table"
+        print_info "  Root: ${ROOT_PART} (full disk) - ${FS_TYPE}"
+    fi
 fi
 
 # Wait for partitions to appear
@@ -529,9 +666,12 @@ sleep 1
 # Format partitions
 print_step "Formatting partitions..."
 
-if [[ "$BOOT_MODE" == "UEFI" ]]; then
+if [[ "$BOOT_MODE" == "UEFI" ]] && [[ "$DUAL_BOOT" != "yes" ]]; then
+    # Only format EFI partition on clean install, not dual-boot
     mkfs.fat -F32 "$EFI_PART" &>/dev/null
     print_msg "Formatted EFI partition (FAT32)"
+elif [[ "$DUAL_BOOT" == "yes" ]]; then
+    print_info "Using existing EFI partition (not formatting)"
 fi
 
 # Handle LUKS encryption
@@ -604,7 +744,7 @@ print_step "Installing base system (this may take a while)..."
 
 # Base packages
 PACKAGES="base base-devel linux linux-firmware networkmanager grub sudo nano vim btop terminator tmux kitty"
-PACKAGES="$PACKAGES reflector"
+PACKAGES="$PACKAGES reflector os-prober ntfs-3g"
 
 # Add btrfs-progs if using btrfs
 if [[ "$FS_TYPE" == "btrfs" ]]; then
@@ -919,6 +1059,11 @@ EOF
 # Regenerate initramfs
 mkinitcpio -P
 
+# Enable os-prober for dual-boot detection
+if [[ "${DUAL_BOOT}" == "yes" ]]; then
+    echo "GRUB_DISABLE_OS_PROBER=false" >> /etc/default/grub
+fi
+
 # Install bootloader
 if [[ "${BOOT_MODE}" == "UEFI" ]]; then
     grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=ARCH
@@ -985,6 +1130,9 @@ if [[ "$FS_TYPE" == "btrfs" ]]; then
 fi
 if [[ "$USE_LUKS" == "yes" ]]; then
     echo -e "  • ${MAGENTA}LUKS${NC} full disk encryption"
+fi
+if [[ "$DUAL_BOOT" == "yes" ]]; then
+    echo -e "  • ${MAGENTA}Dual-boot${NC} with Windows (os-prober enabled)"
 fi
 echo ""
 if [[ "$USE_LUKS" == "yes" ]]; then
