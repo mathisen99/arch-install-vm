@@ -191,6 +191,37 @@ clear
 print_msg "Selected filesystem: ${BOLD}${FS_TYPE}${NC}"
 
 # ============================================================================
+# ENCRYPTION SELECTION
+# ============================================================================
+print_header "Disk Encryption"
+
+if dialog --clear --title "LUKS Encryption" \
+    --yesno "Do you want to encrypt your disk with LUKS?\n\nThis provides full disk encryption for security.\nYou will need to enter a password at every boot." 10 60 2>&1 >/dev/tty; then
+    USE_LUKS="yes"
+    clear
+    print_msg "LUKS encryption: ${BOLD}Enabled${NC}"
+    
+    # Get LUKS password
+    while true; do
+        LUKS_PASSWORD=$(dialog --clear --title "LUKS Encryption Password" \
+            --insecure --passwordbox "Enter encryption password:" 8 50 2>&1 >/dev/tty)
+        LUKS_PASSWORD_CONFIRM=$(dialog --clear --title "LUKS Encryption Password" \
+            --insecure --passwordbox "Confirm encryption password:" 8 50 2>&1 >/dev/tty)
+        
+        if [[ "$LUKS_PASSWORD" == "$LUKS_PASSWORD_CONFIRM" ]] && [[ -n "$LUKS_PASSWORD" ]]; then
+            break
+        fi
+        dialog --clear --title "Error" --msgbox "Passwords don't match or are empty. Try again." 6 50
+    done
+    clear
+    print_msg "LUKS password set"
+else
+    USE_LUKS="no"
+    clear
+    print_msg "LUKS encryption: ${BOLD}Disabled${NC}"
+fi
+
+# ============================================================================
 # DESKTOP ENVIRONMENT SELECTION
 # ============================================================================
 print_header "Desktop Environment Selection"
@@ -357,6 +388,7 @@ print_msg "User password set"
 # ============================================================================
 print_header "Installation Summary"
 echo -e "  ${BOLD}Disk:${NC}        $DISK"
+echo -e "  ${BOLD}Encryption:${NC}  $(if [[ "$USE_LUKS" == "yes" ]]; then echo "LUKS"; else echo "None"; fi)"
 echo -e "  ${BOLD}Filesystem:${NC}  $FS_TYPE"
 echo -e "  ${BOLD}Boot Mode:${NC}   $BOOT_MODE"
 echo -e "  ${BOLD}Hostname:${NC}    $HOSTNAME"
@@ -444,13 +476,34 @@ if [[ "$BOOT_MODE" == "UEFI" ]]; then
     print_msg "Formatted EFI partition (FAT32)"
 fi
 
+# Handle LUKS encryption
+if [[ "$USE_LUKS" == "yes" ]]; then
+    print_step "Setting up LUKS encryption..."
+    
+    # Create LUKS container
+    echo -n "$LUKS_PASSWORD" | cryptsetup luksFormat --type luks2 "$ROOT_PART" -
+    print_msg "LUKS container created"
+    
+    # Open LUKS container
+    echo -n "$LUKS_PASSWORD" | cryptsetup open "$ROOT_PART" cryptroot -
+    print_msg "LUKS container opened"
+    
+    # The actual device to format is now /dev/mapper/cryptroot
+    CRYPT_ROOT="/dev/mapper/cryptroot"
+    
+    # Get UUID of the LUKS partition (needed for GRUB)
+    LUKS_UUID=$(blkid -s UUID -o value "$ROOT_PART")
+else
+    CRYPT_ROOT="$ROOT_PART"
+fi
+
 if [[ "$FS_TYPE" == "btrfs" ]]; then
-    mkfs.btrfs -f "$ROOT_PART" &>/dev/null
+    mkfs.btrfs -f "$CRYPT_ROOT" &>/dev/null
     print_msg "Formatted root partition (btrfs)"
     
     # Mount and create subvolumes
     print_step "Creating btrfs subvolumes..."
-    mount "$ROOT_PART" /mnt
+    mount "$CRYPT_ROOT" /mnt
     
     btrfs subvolume create /mnt/@ &>/dev/null
     btrfs subvolume create /mnt/@home &>/dev/null
@@ -464,17 +517,17 @@ if [[ "$FS_TYPE" == "btrfs" ]]; then
     # Mount subvolumes with optimal options
     BTRFS_OPTS="noatime,compress=zstd,space_cache=v2,discard=async"
     
-    mount -o subvol=@,${BTRFS_OPTS} "$ROOT_PART" /mnt
+    mount -o subvol=@,${BTRFS_OPTS} "$CRYPT_ROOT" /mnt
     mkdir -p /mnt/{home,.snapshots,var/log,boot}
-    mount -o subvol=@home,${BTRFS_OPTS} "$ROOT_PART" /mnt/home
-    mount -o subvol=@snapshots,${BTRFS_OPTS} "$ROOT_PART" /mnt/.snapshots
-    mount -o subvol=@var_log,${BTRFS_OPTS} "$ROOT_PART" /mnt/var/log
+    mount -o subvol=@home,${BTRFS_OPTS} "$CRYPT_ROOT" /mnt/home
+    mount -o subvol=@snapshots,${BTRFS_OPTS} "$CRYPT_ROOT" /mnt/.snapshots
+    mount -o subvol=@var_log,${BTRFS_OPTS} "$CRYPT_ROOT" /mnt/var/log
     
     print_msg "Mounted btrfs subvolumes with compression"
 else
-    mkfs.ext4 -F "$ROOT_PART" &>/dev/null
+    mkfs.ext4 -F "$CRYPT_ROOT" &>/dev/null
     print_msg "Formatted root partition (ext4)"
-    mount "$ROOT_PART" /mnt
+    mount "$CRYPT_ROOT" /mnt
 fi
 
 if [[ "$BOOT_MODE" == "UEFI" ]]; then
@@ -667,6 +720,18 @@ EOF
 # Enable zswap via kernel command line
 sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="[^"]*/& zswap.enabled=1 zswap.compressor=zstd zswap.max_pool_percent=25/' /etc/default/grub
 
+# Configure LUKS if enabled
+if [[ "${USE_LUKS}" == "yes" ]]; then
+    # Add encrypt hook to mkinitcpio
+    sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf kms keyboard keymap consolefont block encrypt filesystems fsck)/' /etc/mkinitcpio.conf
+    
+    # Configure GRUB for LUKS
+    sed -i "s|GRUB_CMDLINE_LINUX=\"\"|GRUB_CMDLINE_LINUX=\"cryptdevice=UUID=${LUKS_UUID}:cryptroot root=/dev/mapper/cryptroot\"|" /etc/default/grub
+    
+    # Enable GRUB cryptodisk for BIOS systems
+    echo "GRUB_ENABLE_CRYPTODISK=y" >> /etc/default/grub
+fi
+
 # Enable services
 systemctl enable NetworkManager
 systemctl enable reflector.timer
@@ -754,6 +819,13 @@ print_msg "zswap enabled"
 # ============================================================================
 print_step "Unmounting partitions..."
 umount -R /mnt
+
+# Close LUKS container if used
+if [[ "$USE_LUKS" == "yes" ]]; then
+    cryptsetup close cryptroot
+    print_msg "LUKS container closed"
+fi
+
 print_msg "Partitions unmounted"
 
 print_header "Installation Complete!"
@@ -788,7 +860,14 @@ echo -e "  • ${MAGENTA}Reflector${NC} timer for automatic mirror updates"
 if [[ "$FS_TYPE" == "btrfs" ]]; then
     echo -e "  • ${MAGENTA}Btrfs${NC} with subvolumes and zstd compression"
 fi
+if [[ "$USE_LUKS" == "yes" ]]; then
+    echo -e "  • ${MAGENTA}LUKS${NC} full disk encryption"
+fi
 echo ""
+if [[ "$USE_LUKS" == "yes" ]]; then
+    echo -e "${BOLD}${YELLOW}Note:${NC} You will be prompted for your encryption password at boot."
+    echo ""
+fi
 if [[ "$DESKTOP_ENV" == "i3" ]] && [[ -z "$DISPLAY_MANAGER" ]]; then
     echo -e "${BOLD}To start i3:${NC}"
     echo -e "  Login and run: ${CYAN}startx${NC}"
