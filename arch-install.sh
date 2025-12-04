@@ -222,6 +222,8 @@ echo -e "  ${BOLD}Timezone:${NC}   $TIMEZONE"
 echo -e "  ${BOLD}Locale:${NC}     ${LOCALE}.UTF-8"
 echo -e "  ${BOLD}Keymap:${NC}     $KEYMAP"
 echo -e "  ${BOLD}Username:${NC}   $USERNAME"
+echo -e "  ${BOLD}Desktop:${NC}    XFCE4 + LightDM"
+echo -e "  ${BOLD}Audio:${NC}      PipeWire"
 if [[ -n "$MICROCODE" ]]; then
     echo -e "  ${BOLD}Microcode:${NC}  $MICROCODE"
 fi
@@ -335,6 +337,8 @@ fi
 
 # Install base system
 print_step "Installing base system (this may take a while)..."
+
+# Base packages
 PACKAGES="base base-devel linux linux-firmware networkmanager grub sudo nano vim"
 
 # Add microcode if detected
@@ -349,6 +353,30 @@ fi
 
 pacstrap -K /mnt $PACKAGES
 print_msg "Base system installed"
+
+# Install desktop environment and audio
+print_step "Installing XFCE desktop environment..."
+DESKTOP_PACKAGES="xorg xorg-server lightdm lightdm-gtk-greeter lightdm-gtk-greeter-settings"
+DESKTOP_PACKAGES="$DESKTOP_PACKAGES xfce4 xfce4-goodies"
+pacstrap /mnt $DESKTOP_PACKAGES
+print_msg "XFCE desktop installed"
+
+print_step "Installing PipeWire audio stack..."
+AUDIO_PACKAGES="pipewire pipewire-alsa pipewire-pulse pipewire-jack wireplumber"
+AUDIO_PACKAGES="$AUDIO_PACKAGES pavucontrol alsa-utils"
+pacstrap /mnt $AUDIO_PACKAGES
+print_msg "PipeWire audio installed"
+
+print_step "Installing NetworkManager applet and extras..."
+EXTRA_PACKAGES="network-manager-applet nm-connection-editor"
+EXTRA_PACKAGES="$EXTRA_PACKAGES xfce4-pulseaudio-plugin xfce4-notifyd"
+EXTRA_PACKAGES="$EXTRA_PACKAGES gvfs gvfs-mtp gvfs-smb thunar-volman thunar-archive-plugin"
+EXTRA_PACKAGES="$EXTRA_PACKAGES file-roller unzip p7zip"
+EXTRA_PACKAGES="$EXTRA_PACKAGES firefox"
+EXTRA_PACKAGES="$EXTRA_PACKAGES ttf-dejavu ttf-liberation noto-fonts"
+EXTRA_PACKAGES="$EXTRA_PACKAGES xdg-user-dirs xdg-utils"
+pacstrap /mnt $EXTRA_PACKAGES
+print_msg "Extra packages installed"
 
 # Generate fstab
 print_step "Generating fstab..."
@@ -381,8 +409,9 @@ cat > /etc/hosts << EOF
 127.0.1.1   ${HOSTNAME}.localdomain ${HOSTNAME}
 EOF
 
-# Enable NetworkManager
+# Enable services
 systemctl enable NetworkManager
+systemctl enable lightdm
 
 # Set root password
 echo "root:${ROOT_PASSWORD}" | chpasswd
@@ -429,8 +458,9 @@ echo -e "  Root user:    ${CYAN}root${NC}"
 echo -e "  Regular user: ${CYAN}${USERNAME}${NC} (has sudo access)"
 echo ""
 echo -e "${BOLD}After reboot:${NC}"
-echo -e "  • NetworkManager will start automatically"
-echo -e "  • Use ${CYAN}nmtui${NC} or ${CYAN}nmcli${NC} to manage connections"
+echo -e "  • LightDM will start automatically with XFCE desktop"
+echo -e "  • NetworkManager applet in system tray"
+echo -e "  • PipeWire audio with pavucontrol for volume control"
 echo ""
 prompt "Press Enter to reboot (or Ctrl+C to stay)..."
 read
