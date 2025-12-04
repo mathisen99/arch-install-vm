@@ -17,13 +17,13 @@ A simple, interactive script to auto-install Arch Linux inside QEMU/KVM virtual 
 Boot your QEMU VM from the Arch Linux live ISO, then run:
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/mathisen99/arch-vm-install/main/arch-install.sh)
+bash <(curl -sL https://raw.githubusercontent.com/mathisen99/arch-install-vm/main/arch-install.sh)
 ```
 
 Or download and run manually:
 
 ```bash
-curl -sLO https://raw.githubusercontent.com/mathisen99/arch-vm-install/main/arch-install.sh
+curl -sLO https://raw.githubusercontent.com/mathisen99/arch-install-vm/main/arch-install.sh
 chmod +x arch-install.sh
 ./arch-install.sh
 ```
