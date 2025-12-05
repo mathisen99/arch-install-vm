@@ -611,27 +611,40 @@ if [[ "$DUAL_BOOT" == "yes" ]]; then
     NEXT_PART_NUM=$((LAST_PART_NUM + 1))
     
     # Create root partition in free space
-    # First, find free space using parted
     print_step "Creating Arch Linux partition in free space..."
     
-    # Get the end of the last partition and disk size
-    FREE_SPACE_START=$(parted -s "$DISK" unit MiB print free | grep "Free Space" | tail -1 | awk '{print $1}' | sed 's/MiB//')
-    FREE_SPACE_END=$(parted -s "$DISK" unit MiB print free | grep "Free Space" | tail -1 | awk '{print $2}' | sed 's/MiB//')
+    # Parse parted output to find the last "Free Space" block
+    # Format for Free Space lines (no partition number): "StartMiB  EndMiB  SizeMiB  Free Space"
+    # The free space at the end of disk is what we want
+    PARTED_OUTPUT=$(parted -s "$DISK" unit MiB print free 2>/dev/null)
     
-    if [[ -z "$FREE_SPACE_START" ]] || [[ -z "$FREE_SPACE_END" ]]; then
+    # Get the last Free Space line (the one at the end of the disk)
+    FREE_LINE=$(echo "$PARTED_OUTPUT" | grep "Free Space" | tail -1)
+    
+    # Extract start and end values (columns 1 and 2 for Free Space lines)
+    FREE_SPACE_START=$(echo "$FREE_LINE" | awk '{gsub(/MiB/,"",$1); print $1}')
+    FREE_SPACE_END=$(echo "$FREE_LINE" | awk '{gsub(/MiB/,"",$2); print $2}')
+    FREE_SPACE_SIZE=$(echo "$FREE_LINE" | awk '{gsub(/MiB/,"",$3); print $3}')
+    
+    print_info "Free space found: ${FREE_SPACE_START}MiB to ${FREE_SPACE_END}MiB (${FREE_SPACE_SIZE}MiB)"
+    
+    if [[ -z "$FREE_SPACE_START" ]] || [[ -z "$FREE_SPACE_END" ]] || [[ -z "$FREE_SPACE_SIZE" ]]; then
         print_error "No free space found on disk! Please shrink Windows partition first."
+        print_info "Run 'parted $DISK print free' to see disk layout"
         exit 1
     fi
     
-    FREE_SPACE_SIZE=$((FREE_SPACE_END - FREE_SPACE_START))
+    # Convert to integer (remove decimals if any)
+    FREE_SPACE_SIZE=${FREE_SPACE_SIZE%.*}
+    
     if [[ $FREE_SPACE_SIZE -lt 20000 ]]; then
-        print_error "Not enough free space! Need at least 20GB, found ${FREE_SPACE_SIZE}MB"
+        print_error "Not enough free space! Need at least 20GB, found ${FREE_SPACE_SIZE}MiB"
         exit 1
     fi
     
-    print_info "Found ${FREE_SPACE_SIZE}MB of free space"
+    print_msg "Found ${FREE_SPACE_SIZE}MiB of free space"
     
-    # Create the root partition
+    # Create the root partition in the free space
     parted -s "$DISK" mkpart primary ${FS_TYPE} ${FREE_SPACE_START}MiB ${FREE_SPACE_END}MiB
     
     ROOT_PART="${PART_PREFIX}${NEXT_PART_NUM}"
