@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Mathisen's Arch Install Script for VMs
+# Mathisen's Arch Install Script
 # https://github.com/mathisen99/arch-install-vm
 #
 # Run with: bash <(curl -sL https://raw.githubusercontent.com/mathisen99/arch-install-vm/main/arch-install.sh)
