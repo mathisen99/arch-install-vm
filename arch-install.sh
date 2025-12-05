@@ -67,12 +67,80 @@ fi
 
 # Check internet connection
 print_info "Checking internet connection..."
-if ! ping -c 1 archlinux.org &>/dev/null; then
-    print_error "No internet connection! Please connect to the internet first."
-    print_info "For Wi-Fi, use: iwctl"
-    exit 1
+if ! ping -c 1 -W 5 archlinux.org &>/dev/null; then
+    print_warn "No internet connection detected!"
+    echo ""
+    
+    # Check if wireless interfaces exist
+    WIFI_INTERFACES=$(iw dev 2>/dev/null | awk '$1=="Interface"{print $2}')
+    
+    if [[ -n "$WIFI_INTERFACES" ]]; then
+        print_info "WiFi interface(s) detected: ${WIFI_INTERFACES}"
+        echo ""
+        prompt "Would you like to connect to WiFi? (y/n):"
+        read WIFI_CHOICE
+        
+        if [[ "$WIFI_CHOICE" == "y" ]] || [[ "$WIFI_CHOICE" == "Y" ]]; then
+            # Get the first WiFi interface
+            WIFI_IFACE=$(echo "$WIFI_INTERFACES" | head -n1)
+            
+            print_step "Scanning for WiFi networks..."
+            
+            # Make sure the interface is up
+            ip link set "$WIFI_IFACE" up 2>/dev/null
+            
+            # Use iwctl to scan and list networks
+            iwctl station "$WIFI_IFACE" scan 2>/dev/null
+            sleep 3
+            
+            echo ""
+            print_info "Available networks:"
+            echo ""
+            iwctl station "$WIFI_IFACE" get-networks 2>/dev/null
+            echo ""
+            
+            prompt "Enter WiFi network name (SSID):"
+            read WIFI_SSID
+            
+            prompt "Enter WiFi password:"
+            read -s WIFI_PASSWORD
+            echo ""
+            
+            print_step "Connecting to ${WIFI_SSID}..."
+            
+            # Connect using iwctl
+            iwctl --passphrase "$WIFI_PASSWORD" station "$WIFI_IFACE" connect "$WIFI_SSID" 2>/dev/null
+            
+            # Wait for connection
+            sleep 5
+            
+            # Verify connection
+            if ping -c 1 -W 5 archlinux.org &>/dev/null; then
+                print_msg "WiFi connected successfully!"
+            else
+                print_error "Failed to connect to WiFi."
+                print_info "Please connect manually using: iwctl"
+                print_info "  1. iwctl"
+                print_info "  2. station ${WIFI_IFACE} connect \"${WIFI_SSID}\""
+                print_info "  3. Enter password when prompted"
+                print_info "  4. exit"
+                print_info "Then run this script again."
+                exit 1
+            fi
+        else
+            print_error "Internet connection required. Please connect and try again."
+            print_info "For WiFi, use: iwctl"
+            exit 1
+        fi
+    else
+        print_error "No WiFi interfaces detected and no internet connection."
+        print_info "Please connect via Ethernet or configure WiFi manually."
+        print_info "For WiFi, use: iwctl"
+        exit 1
+    fi
+else
+    print_msg "Internet connection OK"
 fi
-print_msg "Internet connection OK"
 
 # Install dialog for ncurses menus
 print_info "Installing dialog for interactive menus..."

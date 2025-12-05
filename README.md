@@ -61,6 +61,7 @@ chmod +x arch-install.sh
 - **RAM** — For tmpfs sizing
 - **GPU** — NVIDIA detection for Wayland compositors
 - **Windows** — EFI Boot Manager & NTFS partitions
+- **WiFi** — Detects wireless interfaces and offers guided setup
 
 ### 💾 Filesystem Options
 | Option | Description |
