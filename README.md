@@ -4,7 +4,7 @@
 
 ![Arch Linux](https://img.shields.io/badge/Arch-Linux-1793D1?style=flat&logo=arch-linux&logoColor=white)
 ![Shell Script](https://img.shields.io/badge/Shell-Bash-4EAA25?style=flat&logo=gnu-bash&logoColor=white)
-![License](https://img.shields.io/badge/License-WTFPL-brightgreen?style=flat)
+![License](https://img.shields.io/badge/License-MIT-brightgreen?style=flat)
 
 *Works on virtual machines and bare metal hardware*
 
@@ -254,19 +254,7 @@ Mount options: `noatime,compress=zstd,space_cache=v2,discard=async`
 
 ## 📜 License
 
-```
-        DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
-                    Version 2, December 2004
-
-Everyone is permitted to copy and distribute verbatim or modified
-copies of this license document, and changing it is allowed as long
-as the name is changed.
-
-            DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
-   TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
-
-  0. You just DO WHAT THE FUCK YOU WANT TO.
-```
+This project is licensed under the [MIT License](LICENSE) - do whatever you want with it.
 
 ---
 
